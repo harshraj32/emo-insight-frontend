@@ -10,18 +10,13 @@ const EmoInsight = () => {
   const [attendees, setAttendees] = useState('');
   const [selectedEmotions, setSelectedEmotions] = useState(['Confusion', 'Boredom', 'Concentration', 'Doubt', 'Authenticity']);
   const [isRecording, setIsRecording] = useState(false);
-  const [showEmotionDetails, setShowEmotionDetails] = useState(false);
   const [status, setStatus] = useState('Welcome!');
   const [setupLogs, setSetupLogs] = useState([]);
-  const [currentEmotion, setCurrentEmotion] = useState({ 
-    type: '', 
-    name: '', 
-    color: '', 
-    participant: '', 
-    confidence: 0,
-    isSalesRep: false 
-  });
-  const [emotionBreakdown, setEmotionBreakdown] = useState([]);
+  
+  // NEW: Store all participants' emotions
+  const [participantEmotions, setParticipantEmotions] = useState({});
+  const [selectedParticipant, setSelectedParticipant] = useState(null);
+  
   const [affinaAdvice, setAffinaAdvice] = useState('');
   const [showAffinaAdvice, setShowAffinaAdvice] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
@@ -160,8 +155,9 @@ const EmoInsight = () => {
         }
       });
 
-      socketRef.current.on('emotion_detected', (data) => {
-        handleEmotionDetected(data);
+      // NEW: Handle batch emotions
+      socketRef.current.on('emotions_batch', (data) => {
+        handleEmotionsBatch(data);
       });
 
       socketRef.current.on('affina_advice', (data) => {
@@ -203,56 +199,58 @@ const EmoInsight = () => {
     }
   };
 
-  const handleEmotionDetected = (data) => {
-    const { speaker, audio, video, is_sales_rep, blended_label } = data;
-    
-    let allEmotions = [];
-    let mediaType = 'unknown';
-    
-    if (video && video.top_emotions && video.top_emotions.length > 0) {
-      allEmotions = video.top_emotions.map(e => ({
-        name: e.name,
-        score: e.score,
-        source: 'facial'
-      }));
-      mediaType = 'facial';
+  // NEW: Handle batch emotions from backend
+  const handleEmotionsBatch = (data) => {
+    if (!data.participants || !Array.isArray(data.participants)) {
+      return;
     }
-    else if (audio && audio.top_emotions && audio.top_emotions.length > 0) {
-      allEmotions = audio.top_emotions.map(e => ({
-        name: e.name,
-        score: e.score,
-        source: 'voice'
-      }));
-      mediaType = 'voice';
-    }
+
+    const newParticipants = {};
     
-    if (allEmotions.length > 0) {
-      const topEmotion = allEmotions[0];
-      const threshold = 0.07;
+    data.participants.forEach(p => {
+      const speaker = p.speaker || 'Unknown';
+      const audioEmotions = p.audio?.top_emotions || [];
+      const videoEmotions = p.video?.top_emotions || [];
       
-      const closeEmotions = allEmotions.filter(e => 
-        topEmotion.score - e.score <= threshold
-      ).slice(0, 3);
+      // Prioritize video over audio
+      const allEmotions = videoEmotions.length > 0 ? videoEmotions : audioEmotions;
       
-      const displayLabel = blended_label || (
-        closeEmotions.length > 1 
-          ? closeEmotions.map(e => e.name).join(',')
-          : topEmotion.name
-      );
-      
-      setCurrentEmotion({
-        type: 'audio-video',
-        name: displayLabel,
-        participant: speaker || 'Unknown',
-        confidence: topEmotion.score,
-        color: emotionColors[topEmotion.name.toLowerCase()] || 'bg-gray-400/40 border-gray-400/60',
-        isSalesRep: is_sales_rep || false
-      });
-      
-      setEmotionBreakdown(closeEmotions);
-      
-      const roleIndicator = is_sales_rep ? ' [You]' : ' [Customer]';
-      addSetupLog(`${speaker}${roleIndicator}: ${displayLabel} (${Math.round(topEmotion.score * 100)}%)`);
+      if (allEmotions.length > 0) {
+        const topEmotion = allEmotions[0];
+        const threshold = 0.07;
+        
+        const closeEmotions = allEmotions.filter(e => 
+          topEmotion.score - e.score <= threshold
+        ).slice(0, 3);
+        
+        const displayLabel = p.blended_label || (
+          closeEmotions.length > 1 
+            ? closeEmotions.map(e => e.name).join(',')
+            : topEmotion.name
+        );
+        
+        newParticipants[speaker] = {
+          name: displayLabel,
+          participant: speaker,
+          confidence: topEmotion.score,
+          color: emotionColors[topEmotion.name.toLowerCase()] || 'bg-gray-400/40 border-gray-400/60',
+          isSalesRep: p.is_sales_rep || false,
+          breakdown: closeEmotions,
+          timestamp: new Date().toLocaleTimeString(),
+          mediaType: videoEmotions.length > 0 ? 'Facial' : 'Voice'
+        };
+
+        // Log to activity
+        const roleIndicator = p.is_sales_rep ? ' [You]' : ' [Customer]';
+        addSetupLog(`${speaker}${roleIndicator}: ${displayLabel} (${Math.round(topEmotion.score * 100)}%)`);
+      }
+    });
+
+    setParticipantEmotions(newParticipants);
+    
+    // Auto-select first participant if none selected
+    if (!selectedParticipant && Object.keys(newParticipants).length > 0) {
+      setSelectedParticipant(Object.keys(newParticipants)[0]);
     }
   };
 
@@ -347,8 +345,8 @@ const EmoInsight = () => {
       setIsRecording(false);
       setSetupPhase('meeting-config');
       setSessionId(null);
-      setCurrentEmotion({ type: '', name: '', color: '', participant: '', confidence: 0, isSalesRep: false });
-      setEmotionBreakdown([]);
+      setParticipantEmotions({});
+      setSelectedParticipant(null);
       setAffinaAdvice('');
       setStatus('Session ended');
       setSetupLogs([]);
@@ -389,6 +387,7 @@ const EmoInsight = () => {
   };
 
   const indicator = getStatusIndicator();
+  const currentEmotion = selectedParticipant ? participantEmotions[selectedParticipant] : null;
 
   return (
     <div className="w-full h-full flex items-center justify-center min-h-screen" style={{ background: 'transparent' }}>
@@ -521,74 +520,85 @@ const EmoInsight = () => {
                 <span className="mx-2 text-white/50">•</span>
                 <span className="text-white/70">{status}</span>
               </div>
-              {currentEmotion.name && (
-  <div className="rounded-xl border border-white/20 overflow-hidden bg-white/5">
-    {/* Collapsed Header */}
-    <button
-      onClick={() => setShowEmotionDetails(!showEmotionDetails)}
-      className="w-full p-3 text-left transition-colors hover:bg-white/10 flex items-center justify-between"
-      style={{ WebkitAppRegion: 'no-drag' }}
-    >
-      <div className="flex items-center gap-2">
-        <div className={`w-3 h-3 rounded ${currentEmotion.color.split(' ')[0]}`}></div>
-        <span className="text-white/90 font-medium text-sm">Current Emotion</span>
-        {currentEmotion.isSalesRep && (
-          <span className="text-xs bg-blue-500/50 px-2 py-0.5 rounded-full text-white">You</span>
-        )}
-      </div>
-      <span className="text-white/70 text-xs">{showEmotionDetails ? '▼' : '▶'}</span>
-    </button>
-    
-    {/* Expanded Content */}
-    {showEmotionDetails && (
-      <div className="p-4 bg-black/40 border-t border-white/20">
-        {/* Emotion Details - Colored Box */}
-        <div className={`rounded-lg p-3 border-2 ${currentEmotion.color}`}>
-          <div className="text-white/70 text-xs mb-2">
-            {currentEmotion.type === 'facial' ? 'Facial' : 'Facial-Audio'} • <span className="text-white/50">10s ago</span>
-          </div>
-          <div className="text-white text-base font-bold capitalize mb-3">
-            {currentEmotion.participant}: {currentEmotion.name}
-          </div>
-          <div className="w-full bg-white/20 rounded-full h-2 mb-1">
-            <div 
-              className="bg-white/80 h-2 rounded-full transition-all duration-500" 
-              style={{width: `${Math.round(currentEmotion.confidence * 100)}%`}}
-            ></div>
-          </div>
-          <div className="text-white/70 text-xs text-right">
-            {Math.round(currentEmotion.confidence * 100)}% confidence
-          </div>
-        </div>
 
-        {/* Detailed Breakdown - Separate section with spacing */}
-        {emotionBreakdown.length > 1 && (
-          <div className="mt-3 rounded-lg bg-black/60 border border-white/20 p-3">
-            <div className="text-white/90 text-xs font-medium mb-3">Detailed Breakdown</div>
-            <div className="space-y-2">
-              {emotionBreakdown.map((emotion, idx) => (
-                <div key={idx} className="flex items-center gap-2">
-                  <span className="text-white/80 text-xs w-20 capitalize truncate">
-                    {emotion.name}
-                  </span>
-                  <div className="flex-1 bg-white/20 rounded-full h-1.5">
-                    <div 
-                      className="bg-white/80 h-1.5 rounded-full transition-all duration-500" 
-                      style={{width: `${emotion.score * 100}%`}}
-                    />
+              {/* Participant Selector */}
+              {Object.keys(participantEmotions).length > 0 && (
+                <div className="space-y-3">
+                  <div className="text-white/90 text-sm font-medium">Participants</div>
+                  <div className="flex gap-2 overflow-x-auto pb-2">
+                    {Object.entries(participantEmotions).map(([speaker, emotion]) => (
+                      <button
+                        key={speaker}
+                        onClick={() => setSelectedParticipant(speaker)}
+                        className={`flex-shrink-0 px-3 py-2 rounded-lg border-2 transition-all ${
+                          selectedParticipant === speaker
+                            ? emotion.color + ' scale-105'
+                            : 'bg-white/5 border-white/20 hover:border-white/40'
+                        }`}
+                        style={{ WebkitAppRegion: 'no-drag' }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${emotion.color.split(' ')[0]}`}></div>
+                          <span className="text-white text-xs font-medium truncate max-w-[100px]">
+                            {speaker}
+                          </span>
+                          {emotion.isSalesRep && (
+                            <span className="text-xs bg-blue-500/50 px-1.5 py-0.5 rounded text-white">You</span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
                   </div>
-                  <span className="text-white/70 text-xs w-10 text-right">
-                    {Math.round(emotion.score * 100)}%
-                  </span>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    )}
-  </div>
-)}
+              )}
+
+              {/* Selected Participant Emotion Card */}
+              {currentEmotion && (
+                <div className="rounded-xl border border-white/20 overflow-hidden bg-white/5">
+                  <div className={`rounded-lg p-4 border-2 ${currentEmotion.color}`}>
+                    <div className="text-white/70 text-xs mb-2">
+                      {currentEmotion.mediaType} • <span className="text-white/50">{currentEmotion.timestamp}</span>
+                    </div>
+                    <div className="text-white text-base font-bold capitalize mb-3">
+                      {currentEmotion.participant}: {currentEmotion.name}
+                    </div>
+                    <div className="w-full bg-white/20 rounded-full h-2 mb-1">
+                      <div 
+                        className="bg-white/80 h-2 rounded-full transition-all duration-500" 
+                        style={{width: `${Math.round(currentEmotion.confidence * 100)}%`}}
+                      ></div>
+                    </div>
+                    <div className="text-white/70 text-xs text-right">
+                      {Math.round(currentEmotion.confidence * 100)}% confidence
+                    </div>
+                  </div>
+
+                  {/* Detailed Breakdown */}
+                  {currentEmotion.breakdown && currentEmotion.breakdown.length > 1 && (
+                    <div className="p-4 bg-black/40 border-t border-white/20">
+                      <div className="text-white/90 text-xs font-medium mb-3">Detailed Breakdown</div>
+                      <div className="space-y-2">
+                        {currentEmotion.breakdown.map((emotion, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <span className="text-white/80 text-xs w-20 capitalize truncate">
+                              {emotion.name}
+                            </span>
+                            <div className="flex-1 bg-white/20 rounded-full h-1.5">
+                              <div 
+                                className="bg-white/80 h-1.5 rounded-full transition-all duration-500" 
+                                style={{width: `${emotion.score * 100}%`}}
+                              />
+                            </div>
+                            <span className="text-white/70 text-xs w-10 text-right">
+                              {Math.round(emotion.score * 100)}%
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Affina Advice - Collapsible */}
               {affinaAdvice && (
