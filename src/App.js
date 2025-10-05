@@ -10,20 +10,23 @@ const EmoInsight = () => {
   const [attendees, setAttendees] = useState('');
   const [selectedEmotions, setSelectedEmotions] = useState(['Confusion', 'Boredom', 'Concentration', 'Doubt', 'Authenticity']);
   const [isRecording, setIsRecording] = useState(false);
+  const [showEmotionDetails, setShowEmotionDetails] = useState(false);
   const [status, setStatus] = useState('Welcome!');
   const [setupLogs, setSetupLogs] = useState([]);
-  
-  // NEW: Store all participants' emotions
+  const pinnedParticipantRef = useRef(null); // ADD THIS
+
+  // Store all participants and their emotions
+  const [allParticipants, setAllParticipants] = useState([]);
   const [participantEmotions, setParticipantEmotions] = useState({});
   const [selectedParticipant, setSelectedParticipant] = useState(null);
-  
+  const [pinnedParticipant, setPinnedParticipant] = useState(null);
   const [affinaAdvice, setAffinaAdvice] = useState('');
   const [showAffinaAdvice, setShowAffinaAdvice] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [isFirstTime, setIsFirstTime] = useState(true);
-
+  
   const socketRef = useRef(null);
   const BACKEND_URL = 'https://emo-insight-backend.onrender.com';
 
@@ -155,7 +158,6 @@ const EmoInsight = () => {
         }
       });
 
-      // NEW: Handle batch emotions
       socketRef.current.on('emotions_batch', (data) => {
         handleEmotionsBatch(data);
       });
@@ -199,20 +201,21 @@ const EmoInsight = () => {
     }
   };
 
-  // NEW: Handle batch emotions from backend
   const handleEmotionsBatch = (data) => {
     if (!data.participants || !Array.isArray(data.participants)) {
       return;
     }
-
-    const newParticipants = {};
+  
+    const newEmotions = {};
+    const currentBatchParticipants = [];
     
     data.participants.forEach(p => {
       const speaker = p.speaker || 'Unknown';
+      currentBatchParticipants.push(speaker);
+      
       const audioEmotions = p.audio?.top_emotions || [];
       const videoEmotions = p.video?.top_emotions || [];
       
-      // Prioritize video over audio
       const allEmotions = videoEmotions.length > 0 ? videoEmotions : audioEmotions;
       
       if (allEmotions.length > 0) {
@@ -229,7 +232,7 @@ const EmoInsight = () => {
             : topEmotion.name
         );
         
-        newParticipants[speaker] = {
+        newEmotions[speaker] = {
           name: displayLabel,
           participant: speaker,
           confidence: topEmotion.score,
@@ -237,21 +240,84 @@ const EmoInsight = () => {
           isSalesRep: p.is_sales_rep || false,
           breakdown: closeEmotions,
           timestamp: new Date().toLocaleTimeString(),
-          mediaType: videoEmotions.length > 0 ? 'Facial' : 'Voice'
+          mediaType: videoEmotions.length > 0 ? 'Facial' : 'Voice',
+          status: 'active'
         };
-
-        // Log to activity
+  
         const roleIndicator = p.is_sales_rep ? ' [You]' : ' [Customer]';
         addSetupLog(`${speaker}${roleIndicator}: ${displayLabel} (${Math.round(topEmotion.score * 100)}%)`);
       }
     });
-
-    setParticipantEmotions(newParticipants);
-    
-    // Auto-select first participant if none selected
-    if (!selectedParticipant && Object.keys(newParticipants).length > 0) {
-      setSelectedParticipant(Object.keys(newParticipants)[0]);
+  
+    // Update participants and emotions together
+setAllParticipants(prevParticipants => {
+  // Add new participants
+  const updatedList = [...prevParticipants];
+  currentBatchParticipants.forEach(name => {
+    if (!updatedList.includes(name)) {
+      updatedList.push(name);
     }
+  });
+  
+  // Now update emotions using the current list
+  setParticipantEmotions(prevEmotions => {
+    const updated = { ...prevEmotions };
+    
+    // Update with new data
+    Object.keys(newEmotions).forEach(speaker => {
+      updated[speaker] = newEmotions[speaker];
+    });
+    
+    // Mark participants not in current batch as "processing"
+    updatedList.forEach(speaker => {
+      if (!currentBatchParticipants.includes(speaker)) {
+        if (updated[speaker]) {
+          updated[speaker] = {
+            ...updated[speaker],
+            status: 'processing'
+          };
+        } else {
+          updated[speaker] = {
+            name: 'Processing...',
+            participant: speaker,
+            confidence: 0,
+            color: 'bg-gray-400/40 border-gray-400/60',
+            isSalesRep: false,
+            breakdown: [],
+            timestamp: new Date().toLocaleTimeString(),
+            mediaType: 'Unknown',
+            status: 'processing'
+          };
+        }
+      }
+    });
+    
+    return updated;
+  });
+  
+  return updatedList;
+});
+
+// DON'T auto-select anymore - keep the pinned/selected one
+// Only select first if nothing is selected yet
+if (!pinnedParticipantRef.current && currentBatchParticipants.length > 0) {
+  const firstParticipant = currentBatchParticipants[0];
+  setSelectedParticipant(firstParticipant);
+  setPinnedParticipant(firstParticipant);
+  pinnedParticipantRef.current = firstParticipant; // ADD THIS
+}
+  };
+
+  const getSortedParticipants = () => {
+    if (!pinnedParticipant) {
+      return allParticipants;
+    }
+    
+    // Put pinned participant first, then the rest
+    return [
+      pinnedParticipant,
+      ...allParticipants.filter(p => p !== pinnedParticipant)
+    ];
   };
 
   const handleAffinaAdvice = (advice) => {
@@ -337,21 +403,25 @@ const EmoInsight = () => {
           },
           body: JSON.stringify({ session_id: sessionId })
         });
-
+  
         const data = await response.json();
         addSetupLog(data.message || 'Session stopped');
       }
-
+  
       setIsRecording(false);
       setSetupPhase('meeting-config');
       setSessionId(null);
+      setAllParticipants([]);
       setParticipantEmotions({});
       setSelectedParticipant(null);
+      setPinnedParticipant(null);
+      pinnedParticipantRef.current = null;
       setAffinaAdvice('');
       setStatus('Session ended');
       setSetupLogs([]);
       setShowAffinaAdvice(false);
-
+      setShowEmotionDetails(false);
+  
     } catch (error) {
       addSetupLog(`Stop error: ${error.message}`);
     }
@@ -521,80 +591,120 @@ const EmoInsight = () => {
                 <span className="text-white/70">{status}</span>
               </div>
 
-              {/* Participant Selector */}
-              {Object.keys(participantEmotions).length > 0 && (
-                <div className="space-y-3">
-                  <div className="text-white/90 text-sm font-medium">Participants</div>
-                  <div className="flex gap-2 overflow-x-auto pb-2">
-                    {Object.entries(participantEmotions).map(([speaker, emotion]) => (
-                      <button
-                        key={speaker}
-                        onClick={() => setSelectedParticipant(speaker)}
-                        className={`flex-shrink-0 px-3 py-2 rounded-lg border-2 transition-all ${
-                          selectedParticipant === speaker
-                            ? emotion.color + ' scale-105'
-                            : 'bg-white/5 border-white/20 hover:border-white/40'
-                        }`}
-                        style={{ WebkitAppRegion: 'no-drag' }}
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${emotion.color.split(' ')[0]}`}></div>
-                          <span className="text-white text-xs font-medium truncate max-w-[100px]">
-                            {speaker}
-                          </span>
-                          {emotion.isSalesRep && (
-                            <span className="text-xs bg-blue-500/50 px-1.5 py-0.5 rounded text-white">You</span>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Selected Participant Emotion Card */}
-              {currentEmotion && (
+              {/* Current Emotions - Collapsible with Participant Grid */}
+              {allParticipants.length > 0 && (
                 <div className="rounded-xl border border-white/20 overflow-hidden bg-white/5">
-                  <div className={`rounded-lg p-4 border-2 ${currentEmotion.color}`}>
-                    <div className="text-white/70 text-xs mb-2">
-                      {currentEmotion.mediaType} • <span className="text-white/50">{currentEmotion.timestamp}</span>
+                  <button
+                    onClick={() => setShowEmotionDetails(!showEmotionDetails)}
+                    className="w-full p-3 text-left transition-colors hover:bg-white/10 flex items-center justify-between"
+                    style={{ WebkitAppRegion: 'no-drag' }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded bg-blue-500/60"></div>
+                      <span className="text-white/90 font-medium text-sm">Current Emotions</span>
+                      <span className="text-white/50 text-xs">({allParticipants.length} participants)</span>
                     </div>
-                    <div className="text-white text-base font-bold capitalize mb-3">
-                      {currentEmotion.participant}: {currentEmotion.name}
-                    </div>
-                    <div className="w-full bg-white/20 rounded-full h-2 mb-1">
-                      <div 
-                        className="bg-white/80 h-2 rounded-full transition-all duration-500" 
-                        style={{width: `${Math.round(currentEmotion.confidence * 100)}%`}}
-                      ></div>
-                    </div>
-                    <div className="text-white/70 text-xs text-right">
-                      {Math.round(currentEmotion.confidence * 100)}% confidence
-                    </div>
-                  </div>
-
-                  {/* Detailed Breakdown */}
-                  {currentEmotion.breakdown && currentEmotion.breakdown.length > 1 && (
-                    <div className="p-4 bg-black/40 border-t border-white/20">
-                      <div className="text-white/90 text-xs font-medium mb-3">Detailed Breakdown</div>
-                      <div className="space-y-2">
-                        {currentEmotion.breakdown.map((emotion, idx) => (
-                          <div key={idx} className="flex items-center gap-2">
-                            <span className="text-white/80 text-xs w-20 capitalize truncate">
-                              {emotion.name}
-                            </span>
-                            <div className="flex-1 bg-white/20 rounded-full h-1.5">
-                              <div 
-                                className="bg-white/80 h-1.5 rounded-full transition-all duration-500" 
-                                style={{width: `${emotion.score * 100}%`}}
-                              />
-                            </div>
-                            <span className="text-white/70 text-xs w-10 text-right">
-                              {Math.round(emotion.score * 100)}%
-                            </span>
-                          </div>
-                        ))}
+                    <span className="text-white/70 text-xs">{showEmotionDetails ? '▼' : '▶'}</span>
+                  </button>
+                  
+                  {showEmotionDetails && (
+  <div className="p-4 bg-black/40 border-t border-white/20">
+    {/* Participant Grid */}
+    <div className="grid grid-cols-2 gap-2 mb-4">
+      {getSortedParticipants().map(speaker => {
+        const emotion = participantEmotions[speaker];
+        const isProcessing = emotion?.status === 'processing';
+        const emotionColor = emotion?.color?.split(' ')[0] || 'bg-gray-400/40';
+        
+        return (
+          <button
+            key={speaker}
+            onClick={() => {
+              setSelectedParticipant(speaker);
+              setPinnedParticipant(speaker);
+              pinnedParticipantRef.current = speaker; // ADD THIS
+            }}
+            className={`p-2 rounded-lg border transition-all text-left ${
+              selectedParticipant === speaker
+                ? 'bg-white/20 border-white/40'
+                : 'bg-white/5 border-white/20 hover:border-white/30'
+            }`}
+            style={{ WebkitAppRegion: 'no-drag' }}
+          >
+                              <div className="flex items-center gap-2 mb-1">
+                                <div className={`w-2 h-2 rounded-full ${isProcessing ? 'bg-gray-400/40' : emotionColor}`}></div>
+                                <div className="text-white text-xs font-medium truncate flex-1">
+                                  {speaker}
+                                </div>
+                                {emotion?.isSalesRep && (
+                                  <span className="text-xs bg-blue-500/50 px-1.5 py-0.5 rounded text-white">You</span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
+
+                      {/* Selected Participant Details */}
+                      {currentEmotion && (
+                        <>
+                          <div className="text-white/70 text-xs mb-2 border-t border-white/10 pt-3">
+                            Detailed View
+                          </div>
+                          
+                          {currentEmotion.status === 'processing' ? (
+                            <div className="rounded-lg p-4 bg-gray-600/20 border border-gray-500/40">
+                              <div className="text-white/70 text-sm text-center">
+                                Processing {currentEmotion.participant}'s emotions...
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`rounded-lg p-3 border-2 ${currentEmotion.color}`}>
+                                <div className="text-white/70 text-xs mb-2">
+                                  {currentEmotion.mediaType} • <span className="text-white/50">{currentEmotion.timestamp}</span>
+                                </div>
+                                <div className="text-white text-base font-bold capitalize mb-3">
+                                  {currentEmotion.participant}: {currentEmotion.name}
+                                </div>
+                                <div className="w-full bg-white/20 rounded-full h-2 mb-1">
+                                  <div 
+                                    className="bg-white/80 h-2 rounded-full transition-all duration-500" 
+                                    style={{width: `${Math.round(currentEmotion.confidence * 100)}%`}}
+                                  ></div>
+                                </div>
+                                <div className="text-white/70 text-xs text-right">
+                                  {Math.round(currentEmotion.confidence * 100)}% confidence
+                                </div>
+                              </div>
+
+                              {currentEmotion.breakdown && currentEmotion.breakdown.length > 1 && (
+                                <div className="mt-3 rounded-lg bg-black/60 border border-white/20 p-3">
+                                  <div className="text-white/90 text-xs font-medium mb-3">Detailed Breakdown</div>
+                                  <div className="space-y-2">
+                                    {currentEmotion.breakdown.map((emotion, idx) => (
+                                      <div key={idx} className="flex items-center gap-2">
+                                        <span className="text-white/80 text-xs w-20 capitalize truncate">
+                                          {emotion.name}
+                                        </span>
+                                        <div className="flex-1 bg-white/20 rounded-full h-1.5">
+                                          <div 
+                                            className="bg-white/80 h-1.5 rounded-full transition-all duration-500" 
+                                            style={{width: `${emotion.score * 100}%`}}
+                                          />
+                                        </div>
+                                        <span className="text-white/70 text-xs w-10 text-right">
+                                          {Math.round(emotion.score * 100)}%
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
