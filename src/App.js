@@ -543,13 +543,13 @@ if (!pinnedParticipantRef.current && currentBatchParticipants.length > 0) {
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-white/90 text-sm font-medium mb-2">Zoom Link</label>
+                  <label className="block text-white/90 text-sm font-medium mb-2">Meet Link</label>
                   <input
                     type="url"
                     value={meetingLink}
                     onChange={(e) => setMeetingLink(e.target.value)}
                     className="w-full p-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                    placeholder="https://zoom.us/xxx-xxxx-xxx"
+                    placeholder="https://meet.google.com/xxx-xxxx-xxx"
                   />
                 </div>
 
