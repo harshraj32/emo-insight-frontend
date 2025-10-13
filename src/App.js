@@ -233,7 +233,7 @@ const EmoInsight = () => {
         );
         
         newEmotions[speaker] = {
-          name: displayLabel,
+          name: topEmotion.name,
           participant: speaker,
           confidence: topEmotion.score,
           color: emotionColors[topEmotion.name.toLowerCase()] || 'bg-gray-400/40 border-gray-400/60',
@@ -427,6 +427,17 @@ if (!pinnedParticipantRef.current && currentBatchParticipants.length > 0) {
     }
   };
 
+  const handleMinimize = () => {
+    try {
+      if (window.require) {
+        const { ipcRenderer } = window.require('electron');
+        ipcRenderer.send('minimize-app');
+      }
+    } catch (error) {
+      console.log('Not running in Electron');
+    }
+  };
+
   const handleClose = () => {
     if (isRecording) {
       stopSession();
@@ -462,22 +473,35 @@ if (!pinnedParticipantRef.current && currentBatchParticipants.length > 0) {
   return (
     <div className="w-full h-full flex items-center justify-center min-h-screen" style={{ background: 'transparent' }}>
       <div className="w-96 bg-black/85 backdrop-blur-lg rounded-2xl border border-white/30 shadow-2xl overflow-hidden">
-        <div 
-          className="bg-black/80 backdrop-blur-sm p-4 text-center relative cursor-move select-none border-b border-white/20"
-          style={{ WebkitAppRegion: 'drag' }}
-        >
-          <button
-            onClick={handleClose}
-            className="absolute top-3 right-3 w-5 h-5 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-xs transition-all duration-200 hover:scale-110 focus:outline-none"
-            style={{ WebkitAppRegion: 'no-drag' }}
-          >
-            ×
-          </button>
-          <h1 className="text-lg font-semibold text-white">AFFINA</h1>
-          {userName && (
-            <p className="text-white/70 text-xs mt-1">AI Emo Insight Layer</p>
-          )}
-        </div>
+      <div 
+  className="bg-black/80 backdrop-blur-sm p-4 text-center relative cursor-move select-none border-b border-white/20"
+  style={{ WebkitAppRegion: 'drag' }}
+>
+  {/* Minimize Button */}
+  <button
+    onClick={handleMinimize}
+    className="absolute top-3 right-12 w-5 h-5 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-xs transition-all duration-200 hover:scale-110 focus:outline-none"
+    style={{ WebkitAppRegion: 'no-drag' }}
+    title="Minimize"
+  >
+    −
+  </button>
+  
+  {/* Close Button */}
+  <button
+    onClick={handleClose}
+    className="absolute top-3 right-3 w-5 h-5 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-xs transition-all duration-200 hover:scale-110 focus:outline-none"
+    style={{ WebkitAppRegion: 'no-drag' }}
+    title="Close"
+  >
+    ×
+  </button>
+  
+  <h1 className="text-lg font-semibold text-white">AFFINA</h1>
+  {userName && (
+    <p className="text-white/70 text-xs mt-1">AI Emo Insight Layer</p>
+  )}
+</div>
 
         <div className="p-5 space-y-4 max-h-[calc(100vh-120px)] overflow-y-auto">
           {setupPhase === 'welcome' && (

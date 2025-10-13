@@ -1,4 +1,4 @@
-// public/electron.js - Updated Electron main process for Emo Insight
+// public/electron.js - Corrected version with minimize support
 const { app, BrowserWindow, systemPreferences, ipcMain, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -14,11 +14,11 @@ if (!fs.existsSync(capturesDir)) {
 
 function createWindow() {
   const iconPath = isDev 
-    ? path.join(__dirname, 'icon.png')  // Development: public/icon.png
-    : path.join(process.resourcesPath, 'icon.png'); // Production: resources/icon.png
+    ? path.join(__dirname, 'icon.png')
+    : path.join(process.resourcesPath, 'icon.png');
 
-  console.log('Icon path:', iconPath); // Debug log
-  console.log('Icon exists:', fs.existsSync(iconPath)); // Check if file exists
+  console.log('Icon path:', iconPath);
+  console.log('Icon exists:', fs.existsSync(iconPath));
 
   mainWindow = new BrowserWindow({
     width: 400,
@@ -31,29 +31,27 @@ function createWindow() {
       allowRunningInsecureContent: true,
       enableRemoteModule: true
     },
-    frame: false,           // No window frame
-    titleBarStyle: 'hidden', // Hide title bar completely  
-    alwaysOnTop: true,      
-    transparent: true,      // Transparent window
-    resizable: false,       
-    minimizable: false,     
-    maximizable: false,     
-    closable: true,         
+    frame: false,
+    titleBarStyle: 'hidden',
+    alwaysOnTop: true,
+    transparent: true,
+    resizable: false,
+    minimizable: true,
+    maximizable: false,
+    closable: true,
     fullscreenable: false,
     show: false,
     center: true,
-    skipTaskbar: false,     
-    backgroundColor: 'rgba(0,0,0,0)', // Fully transparent
-    hasShadow: false,       // No window shadow
-    thickFrame: false,      // Remove thick frame on Windows
-    roundedCorners: false   // No rounded corners
+    skipTaskbar: false,
+    backgroundColor: 'rgba(0,0,0,0)',
+    hasShadow: false,
+    thickFrame: false,
+    roundedCorners: false
   });
 
   // Load the React app
   if (isDev) {
     mainWindow.loadURL('http://localhost:3000');
-    // Open DevTools in development
-    // mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../build/index.html'));
   }
@@ -63,18 +61,28 @@ function createWindow() {
     mainWindow.show();
     mainWindow.focus();
     
-    // Force it to the front
     if (process.platform === 'darwin') {
       app.dock.show();
     }
     mainWindow.setAlwaysOnTop(true);
-    setTimeout(() => mainWindow.setAlwaysOnTop(false), 1000);
+    
+  });
+
+  // Handle restore event - keep always on top
+  mainWindow.on('restore', () => {
+    console.log('Window restored');
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.focus();
+  });
+
+  // When minimized
+  mainWindow.on('minimize', () => {
+    console.log('Window minimized');
   });
 
   // Handle permission requests
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     console.log('Permission requested:', permission);
-    // Allow screen capture permissions
     if (permission === 'media' || permission === 'display-capture') {
       callback(true);
     } else {
@@ -84,7 +92,8 @@ function createWindow() {
 
   // Handle external links
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    require('electron').shell.openExternal(url);
+    const { shell } = require('electron');
+    shell.openExternal(url);
     return { action: 'deny' };
   });
 
@@ -94,19 +103,13 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-
-
   // Request screen recording permission on macOS
   if (process.platform === 'darwin') {
     const iconPath = path.join(__dirname, 'icon.png');
     if (fs.existsSync(iconPath)) {
-      // Load the image and resize it
-      const nativeImage = require('electron').nativeImage;
+      const { nativeImage } = require('electron');
       let icon = nativeImage.createFromPath(iconPath);
-      
-      // Resize to standard dock size (128x128 is good for dock display)
       icon = icon.resize({ width: 128, height: 128 });
-      
       app.dock.setIcon(icon);
       console.log('Dock icon set to:', iconPath);
     }
@@ -125,13 +128,21 @@ app.whenReady().then(async () => {
 
   createWindow();
 
+  // Handle minimize from renderer
+  ipcMain.on('minimize-app', () => {
+    console.log('Minimize app requested');
+    if (mainWindow) {
+      mainWindow.minimize();
+    }
+  });
+
   // Handle close app message from renderer
   ipcMain.on('close-app', () => {
     console.log('Close app requested');
     app.quit();
   });
 
-  // Handle desktop capturer requests (keeping for potential future use)
+  // Handle desktop capturer requests
   ipcMain.handle('get-desktop-sources', async () => {
     try {
       const sources = await desktopCapturer.getSources({ 
@@ -146,18 +157,13 @@ app.whenReady().then(async () => {
     }
   });
 
-  // Handle saving captured chunks (keeping for potential future use)
+  // Handle saving captured chunks
   ipcMain.handle('save-chunk', async (event, { data, filename }) => {
     try {
       const filePath = path.join(capturesDir, filename);
-      
-      // Convert base64 to buffer
       const base64Data = data.replace(/^data:video\/webm;base64,/, '');
       const buffer = Buffer.from(base64Data, 'base64');
-      
-      // Save file
       fs.writeFileSync(filePath, buffer);
-      
       console.log(`Saved chunk: ${filename} (${buffer.length} bytes)`);
       return { success: true, path: filePath, size: buffer.length };
     } catch (error) {
@@ -210,19 +216,15 @@ app.on('web-contents-created', (event, contents) => {
 app.on('web-contents-created', (event, contents) => {
   contents.on('will-navigate', (event, navigationUrl) => {
     const parsedUrl = new URL(navigationUrl);
-    
     if (parsedUrl.origin !== 'http://localhost:3000' && parsedUrl.origin !== 'file://') {
       event.preventDefault();
     }
   });
 });
 
-// Disable hardware acceleration for better compatibility (must be before app ready)
 app.disableHardwareAcceleration();
 
-// Handle certificate errors
 app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
-  // In development, ignore certificate errors for localhost
   if (isDev && url.startsWith('http://localhost')) {
     event.preventDefault();
     callback(true);
@@ -231,7 +233,6 @@ app.on('certificate-error', (event, webContents, url, error, certificate, callba
   }
 });
 
-// Log app events for debugging
 app.on('before-quit', () => {
   console.log('App is about to quit');
 });
